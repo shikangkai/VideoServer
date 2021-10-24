@@ -6,10 +6,10 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
-	"os/exec"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -29,14 +29,11 @@ func ActionHandler(response http.ResponseWriter, request *http.Request) {
 	case "play-video":
 		videoId := params.Get("video_id")
 		Db.Exec(fmt.Sprintf("insert into view_record (`video_id`, `view_time`, `ip`) values (%s, %d, '%s')", videoId, time.Now().Unix(), request.Host))
+
 	case "delete-video":
 		videoId := params.Get("video_id")
-
-		tx, _ := Db.Begin()
-		tx.Exec(fmt.Sprintf("delete from view_record where video_id = %s", videoId))
-		tx.Exec(fmt.Sprintf("delete from video_tag where video_id = %s", videoId))
-		tx.Exec(fmt.Sprintf("delete from video where id = %s", videoId))
-		tx.Commit()
+		deleted := params.Get("deleted")
+		Db.Exec(fmt.Sprintf("update video set deleted = %s where id = %s", deleted, videoId))
 
 	case "delete-tag":
 		tagId := params.Get("tag_id")
@@ -130,24 +127,24 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 		}
 		var sql string
 		sql = `
-				select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, ifnull(view_count, 0) view_count
+				select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, ifnull(view_count, 0) view_count, deleted
 				from video A left join (select count(0) view_count, video_id from view_record group by video_id) B on A.id = B.video_id`
 
 		if keyword != "" {
-			sql = fmt.Sprintf("%s where title COLLATE UTF8_GENERAL_CI like '%%%s%%'", sql, keyword)
+			sql = fmt.Sprintf("%s where deleted = 0 and title COLLATE UTF8_GENERAL_CI like '%%%s%%'", sql, keyword)
 		}
 
 		if queryType == "none" {
-			sql = fmt.Sprintf("%s where id not in (select distinct video_id from video_tag)", sql)
+			sql = fmt.Sprintf("%s where id not in (select distinct video_id from video_tag) order by id desc", sql)
 		} else {
 
 			if len(tagIds) == 0 {
-				sql = fmt.Sprintf("%s order by modify_time desc limit %d, %d", sql, pageNumberInt*100, 100)
+				sql = fmt.Sprintf("%s order by id desc limit %d, %d", sql, pageNumberInt*200, 200)
 			} else {
 				if queryType == "and" {
-					sql = fmt.Sprintf("%s where id in (select video_id from video_tag where tag_id in (%s) group by video_id having count(0) = %d)", sql, strings.Join(tagIds, ","), len(tagIds))
+					sql = fmt.Sprintf("%s where id in (select video_id from video_tag where tag_id in (%s) group by video_id having count(0) = %d) order by id desc", sql, strings.Join(tagIds, ","), len(tagIds))
 				} else if queryType == "or" {
-					sql = fmt.Sprintf("select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count from (select distinct video_id from video_tag where tag_id in (%s)) A left join (%s) B on A.video_id = B.id", strings.Join(tagIds, ","), sql)
+					sql = fmt.Sprintf("select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count, deleted from (select distinct video_id from video_tag where tag_id in (%s)) A left join (%s) B on A.video_id = B.id order by id desc", strings.Join(tagIds, ","), sql)
 				}
 			}
 		}
@@ -160,9 +157,9 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 
 		for cursor.Next() {
 			var md5, title, extension string
-			var id, duration_ms, size_byte, width, height, modify_time, view_count int64
-			err := cursor.Scan(&id, &md5, &duration_ms, &size_byte, &width, &height, &title, &modify_time, &extension, &view_count)
-			if err != nil {
+			var id, duration_ms, size_byte, width, height, modify_time, view_count, deleted int64
+			err := cursor.Scan(&id, &md5, &duration_ms, &size_byte, &width, &height, &title, &modify_time, &extension, &view_count, &deleted)
+			if err != nil || deleted == 1 {
 				continue
 			}
 			row := make(map[string]interface{})
@@ -175,9 +172,43 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			row["title"] = title
 			row["modify_time"] = modify_time
 			row["view_count"] = view_count
-			row["jpg"] = fmt.Sprintf("/Volumes/Private/VBrowser/Thumbnail-IMG/%s.jpg", md5)
-			row["gif"] = fmt.Sprintf("/Volumes/Private/VBrowser/Thumbnail-GIF/%s.gif", md5)
-			row["src"] = fmt.Sprintf("/Volumes/Private/VBrowser/Video/%s.%s", md5, extension)
+			row["deleted"] = deleted;
+			row["jpg"] = fmt.Sprintf("E:/VBrowser/Thumbnail-IMG/%s.jpg", md5)
+			row["gif"] = fmt.Sprintf("E:/VBrowser/Thumbnail-GIF/%s.gif", md5)
+			row["src"] = fmt.Sprintf("E:/VBrowser/Video/%s.%s", md5, extension)
+			result["data"] = append(result["data"].([]interface{}), row)
+		}
+
+	case "deleted-video-list":
+		var sql string
+		sql = `select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension from video where deleted = 1 order by id desc`
+
+		cursor, err := Db.Query(sql)
+		if err != nil {
+			result["code"] = 1
+			break
+		}
+
+		for cursor.Next() {
+			var md5, title, extension string
+			var id, duration_ms, size_byte, width, height, modify_time int64
+			err := cursor.Scan(&id, &md5, &duration_ms, &size_byte, &width, &height, &title, &modify_time, &extension)
+			if err != nil {
+				continue
+			}
+			row := make(map[string]interface{})
+			row["id"] = id
+			row["md5"] = md5
+			row["duration_ms"] = duration_ms
+			row["size_byte"] = size_byte
+			row["width"] = width
+			row["height"] = height
+			row["title"] = title
+			row["modify_time"] = modify_time
+			row["deleted"] = 1
+			row["jpg"] = fmt.Sprintf("E:/VBrowser/Thumbnail-IMG/%s.jpg", md5)
+			row["gif"] = fmt.Sprintf("E:/VBrowser/Thumbnail-GIF/%s.gif", md5)
+			row["src"] = fmt.Sprintf("E:/VBrowser/Video/%s.%s", md5, extension)
 			result["data"] = append(result["data"].([]interface{}), row)
 		}
 
@@ -208,7 +239,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			result["code"] = 1
 		} else {
 			sql := `
-					select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count, tag_names, tag_ids  
+					select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count, tag_names, tag_ids, deleted  
 					from 
 						(
 							select A.*, ifnull(view_count, 0) view_count 
@@ -235,8 +266,8 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 				result["code"] = 1
 			} else {
 				var md5, title, extension, tag_names, tag_ids string
-				var id, duration_ms, size_byte, width, height, modify_time, view_count int64
-				err := cursor.Scan(&id, &md5, &duration_ms, &size_byte, &width, &height, &title, &modify_time, &extension, &view_count, &tag_names, &tag_ids)
+				var id, duration_ms, size_byte, width, height, modify_time, view_count, deleted int64
+				err := cursor.Scan(&id, &md5, &duration_ms, &size_byte, &width, &height, &title, &modify_time, &extension, &view_count, &tag_names, &tag_ids, &deleted)
 				if err != nil {
 					break
 				}
@@ -251,6 +282,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 				row["title"] = title
 				row["modify_time"] = modify_time
 				row["view_count"] = view_count
+				row["deleted"] = deleted
 				row["jpg"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Thumbnail-IMG/%s.jpg", md5)
 				row["gif"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Thumbnail-GIF/%s.gif", md5)
 				row["src"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Video/%s.%s", md5, extension)
@@ -282,8 +314,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 		row := make(map[string]interface{})
 
 		var albums = make([]map[string]interface{}, 0)
-		// path := "/Users/holobor/Downloads"
-		path := "/Volumes/Private/VBrowser/Picture-Thumbnail/"
+		path := "E:/VBrowser/Picture-Thumbnail/"
 		fs, _ := ioutil.ReadDir(path)
 		for _, file := range fs {
 			if file.IsDir() && !strings.HasPrefix(file.Name(), ".") {
@@ -324,7 +355,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 
 		var images = make([]string, 0)
 		// path := "/Users/holobor/Downloads"
-		path := "/Volumes/Private/VBrowser/Picture-Src/"
+		path := "E:/VBrowser/Picture-Src/"
 		fs, _ := ioutil.ReadDir(path + "/" + albumName)
 		for _, file := range fs {
 			if !file.IsDir() && !strings.HasPrefix(file.Name(), ".") {
