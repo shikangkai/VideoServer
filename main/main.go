@@ -172,7 +172,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			row["title"] = title
 			row["modify_time"] = modify_time
 			row["view_count"] = view_count
-			row["deleted"] = deleted;
+			row["deleted"] = deleted
 			row["jpg"] = fmt.Sprintf("E:/VBrowser/Thumbnail-IMG/%s.jpg", md5)
 			row["gif"] = fmt.Sprintf("E:/VBrowser/Thumbnail-GIF/%s.gif", md5)
 			row["src"] = fmt.Sprintf("E:/VBrowser/Video/%s.%s", md5, extension)
@@ -332,7 +332,7 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 					if !sfile.IsDir() && !strings.HasPrefix(sfile.Name(), ".") {
 
 						count++
-						if count <= 6 {
+						if count <= 20 {
 							images = append(images, album["path"].(string)+"/"+sfile.Name())
 						}
 					}
