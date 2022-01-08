@@ -106,13 +106,13 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 
 	response.Header().Add("Access-Control-Allow-Origin", "*")
 	params := request.URL.Query()
-	pageNumber := params.Get("page_number")
-	var pageNumberInt int64
-	if pageNumber == "" {
-		pageNumberInt = 0
-	} else {
-		pageNumberInt, _ = strconv.ParseInt(pageNumber, 10, 64)
-	}
+	//pageNumber := params.Get("page_number")
+	//var pageNumberInt int64
+	//if pageNumber == "" {
+	//	pageNumberInt = 0
+	//} else {
+	//	pageNumberInt, _ = strconv.ParseInt(pageNumber, 10, 64)
+	//}
 	result := make(map[string]interface{})
 	result["code"] = 0
 	result["data"] = make([]interface{}, 0)
@@ -120,6 +120,10 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 	switch params.Get("type") {
 	case "video-list":
 		keyword := strings.ToLower(params.Get("keyword"))
+		//keywords := "[]"
+		//if keyword != "" {
+		//	keywords = Spli
+		//}
 		tagIds := strings.Split(params.Get("tag_ids"), ",")
 		queryType := params.Get("query_type")
 		if len(tagIds) != 0 && tagIds[0] == "" {
@@ -130,21 +134,17 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 				select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, ifnull(view_count, 0) view_count, deleted
 				from video A left join (select count(0) view_count, video_id from view_record group by video_id) B on A.id = B.video_id`
 
-		if keyword != "" {
-			sql = fmt.Sprintf("%s where deleted = 0 and title COLLATE UTF8_GENERAL_CI like '%%%s%%'", sql, keyword)
-		}
-
 		if queryType == "none" {
-			sql = fmt.Sprintf("%s where id not in (select distinct video_id from video_tag) order by id desc", sql)
+			sql = fmt.Sprintf("%s where deleted = 0 and id not in (select distinct video_id from video_tag) order by id desc", sql)
 		} else {
 
 			if len(tagIds) == 0 {
-				sql = fmt.Sprintf("%s order by id desc limit %d, %d", sql, pageNumberInt*200, 200)
+				sql = fmt.Sprintf("%s where deleted = 0 order by id desc", sql)
 			} else {
 				if queryType == "and" {
-					sql = fmt.Sprintf("%s where id in (select video_id from video_tag where tag_id in (%s) group by video_id having count(0) = %d) order by id desc", sql, strings.Join(tagIds, ","), len(tagIds))
+					sql = fmt.Sprintf("%s where deleted = 0 and id in (select video_id from video_tag where tag_id in (%s) group by video_id having count(0) = %d) order by id desc", sql, strings.Join(tagIds, ","), len(tagIds))
 				} else if queryType == "or" {
-					sql = fmt.Sprintf("select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count, deleted from (select distinct video_id from video_tag where tag_id in (%s)) A left join (%s) B on A.video_id = B.id order by id desc", strings.Join(tagIds, ","), sql)
+					sql = fmt.Sprintf("select id, md5, duration_ms, size_byte, width, height, title, modify_time, extension, view_count, deleted from (select distinct video_id from video_tag where tag_id in (%s)) A left join (%s) B on A.video_id = B.id where deleted = 0 order by id desc", strings.Join(tagIds, ","), sql)
 				}
 			}
 		}
@@ -162,6 +162,11 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			if err != nil || deleted == 1 {
 				continue
 			}
+
+			if !strings.Contains(title, keyword) {
+				continue
+			}
+
 			row := make(map[string]interface{})
 			row["id"] = id
 			row["md5"] = md5
@@ -173,9 +178,9 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			row["modify_time"] = modify_time
 			row["view_count"] = view_count
 			row["deleted"] = deleted
-			row["jpg"] = fmt.Sprintf("E:/VBrowser/Thumbnail-IMG/%s.jpg", md5)
-			row["gif"] = fmt.Sprintf("E:/VBrowser/Thumbnail-GIF/%s.gif", md5)
-			row["src"] = fmt.Sprintf("E:/VBrowser/Video/%s.%s", md5, extension)
+			row["jpg"] = fmt.Sprintf("VBrowser/Thumbnail-IMG/%s.jpg", md5)
+			row["gif"] = fmt.Sprintf("VBrowser/Thumbnail-GIF/%s.gif", md5)
+			row["src"] = fmt.Sprintf("VBrowser/Video/%s.%s", md5, extension)
 			result["data"] = append(result["data"].([]interface{}), row)
 		}
 
@@ -206,14 +211,14 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			row["title"] = title
 			row["modify_time"] = modify_time
 			row["deleted"] = 1
-			row["jpg"] = fmt.Sprintf("E:/VBrowser/Thumbnail-IMG/%s.jpg", md5)
-			row["gif"] = fmt.Sprintf("E:/VBrowser/Thumbnail-GIF/%s.gif", md5)
-			row["src"] = fmt.Sprintf("E:/VBrowser/Video/%s.%s", md5, extension)
+			row["jpg"] = fmt.Sprintf("VBrowser/Thumbnail-IMG/%s.jpg", md5)
+			row["gif"] = fmt.Sprintf("VBrowser/Thumbnail-GIF/%s.gif", md5)
+			row["src"] = fmt.Sprintf("VBrowser/Video/%s.%s", md5, extension)
 			result["data"] = append(result["data"].([]interface{}), row)
 		}
 
 	case "tag-list":
-		cursor, err := Db.Query("select `id`, `name`, `desc`, ifnull(`count`, 0) `count`, `mark_star` from tag A left join (select count(0) count, tag_id from video_tag group by tag_id) B on A.id = B.tag_id order by `name` asc")
+		cursor, err := Db.Query("select `id`, `name`, `desc`, ifnull(`count`, 0) `count`, `mark_star` from tag A left join (select count(0) count, tag_id from video_tag A left join video B on A.video_id = B.id where B.deleted = 0 group by tag_id) B on A.id = B.tag_id order by name asc")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -283,9 +288,9 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 				row["modify_time"] = modify_time
 				row["view_count"] = view_count
 				row["deleted"] = deleted
-				row["jpg"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Thumbnail-IMG/%s.jpg", md5)
-				row["gif"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Thumbnail-GIF/%s.gif", md5)
-				row["src"] = fmt.Sprintf("/Volumes/ProtectedFiles/VBrowser/Video/%s.%s", md5, extension)
+				row["jpg"] = fmt.Sprintf("VBrowser/Thumbnail-IMG/%s.jpg", md5)
+				row["gif"] = fmt.Sprintf("VBrowser/Thumbnail-GIF/%s.gif", md5)
+				row["src"] = fmt.Sprintf("VBrowser/Video/%s.%s", md5, extension)
 				row["tag_names"] = strings.Split(tag_names, ",")
 				row["tag_ids"] = strings.Split(tag_ids, ",")
 				var highRangeMaps = make([]map[string]int, 0)
@@ -321,26 +326,27 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 
 				album := make(map[string]interface{})
 				album["name"] = file.Name()
-				album["path"] = path + "/" + file.Name()
+				album["path"] = "VBrowser/Picture-Thumbnail/" + file.Name() + "/"
 
 				images := make([]string, 0)
-				sfs, _ := ioutil.ReadDir(album["path"].(string))
+				sfs, _ := ioutil.ReadDir(path + file.Name() + "/")
 
-				var count = 0
-				for _, sfile := range sfs {
-
-					if !sfile.IsDir() && !strings.HasPrefix(sfile.Name(), ".") {
-
-						count++
-						if count <= 20 {
-							images = append(images, album["path"].(string)+"/"+sfile.Name())
-						}
-					}
-				}
-				// TODO
+				//var count = 0
+				//for _, sfile := range sfs {
+				//
+				//	if !sfile.IsDir() && !strings.HasPrefix(sfile.Name(), ".") {
+				//
+				//		count++
+				//		if count <= 20 {
+				//			images = append(images, album["path"].(string)+"/"+sfile.Name())
+				//		}
+				//	}
+				//}
 
 				album["images"] = images
-				album["count"] = count
+				album["count"] = len(sfs)
+				album["base_index"] = 1
+				album["extension"] = "jpg"
 
 				albums = append(albums, album)
 			}
@@ -351,20 +357,23 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 
 	case "image-album-detail":
 		albumName := params.Get("album_name")
-		row := make(map[string]interface{})
+		detail := make(map[string]interface{})
 
 		var images = make([]string, 0)
-		// path := "/Users/holobor/Downloads"
-		path := "E:/VBrowser/Picture-Src/"
-		fs, _ := ioutil.ReadDir(path + "/" + albumName)
-		for _, file := range fs {
-			if !file.IsDir() && !strings.HasPrefix(file.Name(), ".") {
-				images = append(images, path+"/"+albumName+"/"+file.Name())
-			}
-		}
-		row["name"] = albumName
-		row["images"] = images
-		result["data"] = row
+		fs, _ := ioutil.ReadDir("E:/VBrowser/Picture-Src/" + albumName)
+		//for _, file := range fs {
+		//	if !file.IsDir() && !strings.HasPrefix(file.Name(), ".") {
+		//		images = append(images, path+"/"+albumName+"/"+file.Name())
+		//	}
+		//}
+		detail["name"] = albumName
+		detail["images"] = images
+		detail["path"] = "VBrowser/Picture-Src/" + albumName + "/"
+		detail["thumbnail_path"] = "VBrowser/Picture-Thumbnail/" + albumName + "/"
+		detail["count"] = len(fs)
+		detail["base_index"] = 1
+		detail["extension"] = "jpg"
+		result["data"] = detail
 
 	default:
 		result["code"] = 1
