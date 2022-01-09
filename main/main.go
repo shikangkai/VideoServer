@@ -62,6 +62,19 @@ func ActionHandler(response http.ResponseWriter, request *http.Request) {
 			Db.Exec(fmt.Sprintf("update tag set `mark_star` = 0 where id = %s", tagId))
 		}
 
+	case "modify-tag-group":
+		mainTagId := params.Get("main_tag_id")
+		subTagIds := strings.Split(params.Get("sub_tag_ids"), ",")
+		if len(subTagIds) != 0 && subTagIds[0] == "" {
+			subTagIds = subTagIds[1:]
+		}
+		tx, _ := Db.Begin()
+		tx.Exec(fmt.Sprintf("delete from tag_group where main_tag_id = %s", mainTagId))
+		for _, subTagId := range subTagIds {
+			tx.Exec(fmt.Sprintf("insert into tag_group (`main_tag_id`, `sub_tag_id`) values (%s, %s)", mainTagId, subTagId))
+		}
+		_ = tx.Commit()
+
 	case "modify-video-tag":
 		videoId := params.Get("video_id")
 		tagIds := strings.Split(params.Get("tag_ids"), ",")
@@ -120,10 +133,10 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 	switch params.Get("type") {
 	case "video-list":
 		keyword := strings.ToLower(params.Get("keyword"))
-		//keywords := "[]"
-		//if keyword != "" {
-		//	keywords = Spli
-		//}
+		var keywords []string
+		if keyword != "" {
+			keywords = strings.Split(keyword, " ")
+		}
 		tagIds := strings.Split(params.Get("tag_ids"), ",")
 		queryType := params.Get("query_type")
 		if len(tagIds) != 0 && tagIds[0] == "" {
@@ -163,7 +176,17 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			if !strings.Contains(title, keyword) {
+			matched := true
+			if keywords != nil {
+				for _, value := range keywords {
+					if !strings.Contains(title, value) && !strings.Contains(md5, value) {
+						matched = false
+						break
+					}
+				}
+			}
+
+			if !matched {
 				continue
 			}
 
@@ -218,14 +241,39 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 		}
 
 	case "tag-list":
-		cursor, err := Db.Query("select `id`, `name`, `desc`, ifnull(`count`, 0) `count`, `mark_star` from tag A left join (select count(0) count, tag_id from video_tag A left join video B on A.video_id = B.id where B.deleted = 0 group by tag_id) B on A.id = B.tag_id order by name asc")
+		sql := `
+			select TAG_INFO.id, TAG_INFO.name, TAG_INFO.desc, TAG_INFO.count, TAG_INFO.mark_star, ifnull(TAG_GROUP.sub_tag_ids, ""), ifnull(TAG_GROUP.sub_tag_names, "")
+			from 
+			(
+				select id, name, TAG_META.desc, ifnull(count, 0) count, mark_star 
+				from tag TAG_META 
+				left join (
+					select count(0) count, tag_id 
+					from video_tag A 
+					left join video B 
+					on A.video_id = B.id 
+					where B.deleted = 0 
+					group by tag_id
+				) TAG_RES 
+				on TAG_META.id = TAG_RES.tag_id 
+			) TAG_INFO
+			left join 
+			(
+				select A.main_tag_id, group_concat(A.sub_tag_id) sub_tag_ids, group_concat(B.name) sub_tag_names
+				from tag_group A left join tag B on A.sub_tag_id = B.id
+				group by A.main_tag_id
+			) TAG_GROUP
+			on TAG_INFO.id = TAG_GROUP.main_tag_id
+			order by TAG_INFO.name asc
+		`
+		cursor, err := Db.Query(sql)
 		if err != nil {
 			log.Fatal(err)
 		}
 		for cursor.Next() {
-			var name, desc string
+			var name, desc, subTagIds, subTagNames string
 			var id, count, markStar int64
-			err := cursor.Scan(&id, &name, &desc, &count, &markStar)
+			err := cursor.Scan(&id, &name, &desc, &count, &markStar, &subTagIds, &subTagNames)
 			if err != nil {
 				continue
 			}
@@ -235,6 +283,13 @@ func InformationHandler(response http.ResponseWriter, request *http.Request) {
 			row["desc"] = desc
 			row["count"] = count
 			row["mark_star"] = markStar
+			row["sub_tag_ids"] = subTagIds
+			row["sub_tag_names"] = subTagNames
+			if subTagNames == "" {
+				row["title"] = name
+			} else {
+				row["title"] = fmt.Sprintf("%s (%s)", name, subTagNames)
+			}
 			result["data"] = append(result["data"].([]interface{}), row)
 		}
 
